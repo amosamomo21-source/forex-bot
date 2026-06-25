@@ -1,0 +1,17 @@
+[project]
+name = "forex-bot"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "backtesting>=0.6.5",
+    "claude-agent-sdk>=0.2.103",
+    "ctrader-open-api>=0.9.2",
+    "numpy>=2.4.6",
+    "oandapyv20>=0.7.2",
+    "pandas>=3.0.3",
+    "python-dotenv>=1.2.2",
+    "service-identity>=24.2.0",
+    "streamlit>=1.58.0",
+    "yfinance>=1.4.1",
+]
