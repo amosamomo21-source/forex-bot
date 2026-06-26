@@ -76,15 +76,45 @@ M30_SLEEVES = [
     ("bbmrt_m30_audjpy", "AUD_JPY"),
     ("bbmrt_m30_nzdjpy", "NZD_JPY"),
 ]
-ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES))
-RISK_PCT = 0.20       # 20% per trade on demo to accelerate forward testing; revert to 0.01 for funded account
-WARMUP_CANDLES = 500  # comfortably more than either strategy's longest lookback (trend_period=100, slow=50)
-M30_WARMUP = 100      # M30 bars needed for RSI(14) warmup
+H1_SLEEVES = [
+    ("ema_h1_gbpusd",  "GBP_USD"),
+    ("ema_h1_eurjpy",  "EUR_JPY"),
+    ("ema_h1_chfjpy",  "CHF_JPY"),
+    ("ema_h1_cadjpy",  "CAD_JPY"),
+    ("ema_h1_audjpy",  "AUD_JPY"),
+    ("ema_h1_gbpjpy",  "GBP_JPY"),
+    ("ema_h1_nzdjpy",  "NZD_JPY"),
+    ("ema_h1_audchf",  "AUD_CHF"),
+    ("ema_h1_euraud",  "EUR_AUD"),
+    ("ema_h1_audsgd",  "AUD_SGD"),
+]
+ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES))
+RISK_PCT    = 0.20   # M30 BBMRT risk -- revert to 0.01 for funded account
+H1_RISK_PCT = 0.10   # H1 EMA risk -- lower due to higher drawdown profile
+WARMUP_CANDLES = 500
+M30_WARMUP = 100
+H1_WARMUP  = 200     # H1 bars needed for EMA(30) warmup
 
 
 def _log(msg: str) -> None:
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"[{ts}] {msg}")
+
+
+def _load_h1_bars(b: broker.OandaBroker, instrument: str) -> pd.DataFrame:
+    raw = b.get_candles(instrument, granularity="H1", count=H1_WARMUP)
+    rows = []
+    for c in raw:
+        if not c["complete"]:
+            continue
+        mid = c["mid"]
+        rows.append({"time": c["time"], "Open": float(mid["o"]),
+                     "High": float(mid["h"]), "Low": float(mid["l"]), "Close": float(mid["c"])})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["time"] = pd.to_datetime(df["time"])
+    return df.set_index("time")
 
 
 def _load_m30_bars(b: broker.OandaBroker, instrument: str) -> pd.DataFrame:
@@ -413,13 +443,73 @@ def run_bbmrt_m30_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleev
         _log(f"{tag}: no M30 entry signal (RSI crossover not triggered at this run time)")
 
 
+def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
+    """H1 EMA(10/30) crossover with ATR-based SL/TP. Runs hourly."""
+    h1 = _load_h1_bars(b, instrument)
+    if len(h1) < 35:
+        _log(f"{tag}: not enough H1 history ({len(h1)} bars), skipping")
+        return
+
+    fast = ema(h1["Close"], 10)
+    slow = ema(h1["Close"], 30)
+    a    = atr(h1["High"], h1["Low"], h1["Close"], 14)
+
+    price     = h1["Close"].iloc[-1]
+    av        = a.iloc[-1]
+    fast_now  = fast.iloc[-1]; fast_prev = fast.iloc[-2]
+    slow_now  = slow.iloc[-1]; slow_prev = slow.iloc[-2]
+    cross_up  = fast_prev <= slow_prev and fast_now > slow_now
+    cross_dn  = fast_prev >= slow_prev and fast_now < slow_now
+
+    trade = _tagged_trade(b, instrument, tag)
+
+    if trade is not None:
+        is_long = float(trade["currentUnits"]) > 0
+        _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f}")
+        flips = cross_dn if is_long else cross_up
+        if flips:
+            _log(f"{tag}: opposite H1 crossover -- closing to flip")
+            _close_and_journal(b, trade["id"], tag, instrument, "opposite_crossover")
+        else:
+            _log(f"{tag}: holding -- broker SL/TP governs exit")
+            return
+
+    if av != av or av <= 0:
+        _log(f"{tag}: ATR not ready, skipping")
+        return
+    if not (cross_up or cross_dn):
+        _log(f"{tag}: no H1 crossover signal")
+        return
+
+    stop_dist   = 1.5 * av
+    risk_amount = sleeve_equity * H1_RISK_PCT
+    units       = int(risk_amount / stop_dist)
+    if units <= 0:
+        _log(f"{tag}: computed size <= 0, skipping")
+        return
+
+    direction = "long" if cross_up else "short"
+    if _opposite_direction_conflict(b, instrument, tag, direction):
+        return
+
+    if cross_up:
+        sl, tp = price - stop_dist, price + 2.5 * av
+        _log(f"{tag}: BUY H1 EMA cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+    else:
+        sl, tp = price + stop_dist, price - 2.5 * av
+        _log(f"{tag}: SELL H1 EMA cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
+
+
 def main() -> None:
     b = broker.from_env()
     account_equity = float(b.account_summary()["account"]["balance"])
     sleeve_equity = account_equity * ALLOCATION_FRACTION
+    total_sleeves = len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES)
     _log(
         f"account equity={account_equity:.2f}, per-sleeve allocation={sleeve_equity:.2f} "
-        f"({ALLOCATION_FRACTION:.0%} each across {len(SLEEVES) + len(M30_SLEEVES)} sleeves)"
+        f"({ALLOCATION_FRACTION:.0%} each across {total_sleeves} sleeves)"
     )
     for tag, instrument, kind in SLEEVES:
         try:
@@ -432,6 +522,11 @@ def main() -> None:
     for tag, instrument in M30_SLEEVES:
         try:
             run_bbmrt_m30_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in H1_SLEEVES:
+        try:
+            run_h1_sleeve(b, tag, instrument, sleeve_equity)
         except Exception as e:
             _log(f"{tag}: ERROR -- {e}")
 
