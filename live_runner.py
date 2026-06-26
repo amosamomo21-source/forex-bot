@@ -55,12 +55,26 @@ SLEEVES = [
     ("ema_audusd", "AUD_USD", "ema"),
 ]
 M30_SLEEVES = [
+    # Core validated pairs (10y Sharpe > 2.0, positive both periods)
     ("bbmrt_m30_eurusd", "EUR_USD"),
     ("bbmrt_m30_gbpusd", "GBP_USD"),
-    ("bbmrt_m30_xauusd", "XAU_USD"),
+    ("bbmrt_m30_eurcad", "EUR_CAD"),
     ("bbmrt_m30_eurjpy", "EUR_JPY"),
     ("bbmrt_m30_chfjpy", "CHF_JPY"),
     ("bbmrt_m30_audchf", "AUD_CHF"),
+    ("bbmrt_m30_eursgd", "EUR_SGD"),
+    ("bbmrt_m30_gbpaud", "GBP_AUD"),
+    # Additional positive pairs (10y Sharpe 1.0-2.0)
+    ("bbmrt_m30_cadjpy", "CAD_JPY"),
+    ("bbmrt_m30_audsgd", "AUD_SGD"),
+    ("bbmrt_m30_euraud", "EUR_AUD"),
+    ("bbmrt_m30_gbpcad", "GBP_CAD"),
+    ("bbmrt_m30_gbpsgd", "GBP_SGD"),
+    ("bbmrt_m30_gbpjpy", "GBP_JPY"),
+    # Marginal pairs (10y Sharpe 0.2-1.0, included for frequency)
+    ("bbmrt_m30_gbpchf", "GBP_CHF"),
+    ("bbmrt_m30_audjpy", "AUD_JPY"),
+    ("bbmrt_m30_nzdjpy", "NZD_JPY"),
 ]
 ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES))
 RISK_PCT = 0.20       # 20% per trade on demo to accelerate forward testing; revert to 0.01 for funded account
