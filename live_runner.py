@@ -58,6 +58,9 @@ M30_SLEEVES = [
     ("bbmrt_m30_eurusd", "EUR_USD"),
     ("bbmrt_m30_gbpusd", "GBP_USD"),
     ("bbmrt_m30_xauusd", "XAU_USD"),
+    ("bbmrt_m30_eurjpy", "EUR_JPY"),
+    ("bbmrt_m30_chfjpy", "CHF_JPY"),
+    ("bbmrt_m30_audchf", "AUD_CHF"),
 ]
 ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES))
 WARMUP_CANDLES = 500  # comfortably more than either strategy's longest lookback (trend_period=100, slow=50)
