@@ -63,7 +63,7 @@ M30_SLEEVES = [
     ("bbmrt_m30_audchf", "AUD_CHF"),
 ]
 ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES))
-RISK_PCT = 0.05       # 5% per trade on demo to accelerate forward testing; revert to 0.01 for funded account
+RISK_PCT = 0.20       # 20% per trade on demo to accelerate forward testing; revert to 0.01 for funded account
 WARMUP_CANDLES = 500  # comfortably more than either strategy's longest lookback (trend_period=100, slow=50)
 M30_WARMUP = 100      # M30 bars needed for RSI(14) warmup
 
