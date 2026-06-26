@@ -63,6 +63,7 @@ M30_SLEEVES = [
     ("bbmrt_m30_audchf", "AUD_CHF"),
 ]
 ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES))
+RISK_PCT = 0.05       # 5% per trade on demo to accelerate forward testing; revert to 0.01 for funded account
 WARMUP_CANDLES = 500  # comfortably more than either strategy's longest lookback (trend_period=100, slow=50)
 M30_WARMUP = 100      # M30 bars needed for RSI(14) warmup
 
@@ -224,7 +225,7 @@ def run_bbmrt_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_eq
         _log(f"{tag}: ATR not ready, skipping")
         return
 
-    risk_amount = sleeve_equity * Strat.risk_pct
+    risk_amount = sleeve_equity * RISK_PCT
     units = int(risk_amount / stop_distance)
     if units <= 0:
         _log(f"{tag}: computed size <= 0, skipping")
@@ -286,7 +287,7 @@ def run_ema_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equi
         return
 
     stop_distance = Strat.sl_atr_mult * av
-    risk_amount = sleeve_equity * Strat.risk_pct
+    risk_amount = sleeve_equity * RISK_PCT
     units = int(risk_amount / stop_distance)
     if units <= 0:
         _log(f"{tag}: computed size <= 0, skipping")
@@ -372,7 +373,7 @@ def run_bbmrt_m30_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleev
         return
 
     stop_dist   = 2.0 * atr_d
-    risk_amount = sleeve_equity * Strat.risk_pct
+    risk_amount = sleeve_equity * RISK_PCT
     units       = int(risk_amount / stop_dist)
     if units <= 0:
         _log(f"{tag}: computed size <= 0, skipping")
