@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import broker  # noqa: E402
-from live_runner import ALLOCATION_FRACTION, M30_SLEEVES, _log, run_bbmrt_m30_sleeve  # noqa: E402
+from live_runner import (  # noqa: E402
+    ALLOCATION_FRACTION, M30_SLEEVES, ORB_SLEEVES,
+    _log, run_bbmrt_m30_sleeve, run_orb_sleeve,
+)
 
 
 def main() -> None:
@@ -28,6 +31,11 @@ def main() -> None:
     for tag, instrument in M30_SLEEVES:
         try:
             run_bbmrt_m30_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in ORB_SLEEVES:
+        try:
+            run_orb_sleeve(b, tag, instrument, sleeve_equity)
         except Exception as e:
             _log(f"{tag}: ERROR -- {e}")
 

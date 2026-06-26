@@ -45,7 +45,7 @@ load_dotenv()
 import broker  # noqa: E402
 import journal  # noqa: E402
 from strategies import BollingerMeanReversionTrendFilter, EmaCrossoverAtr  # noqa: E402
-from strategies import atr, ema, rsi, rolling_std, sma  # noqa: E402
+from strategies import atr, ema, macd, rsi, rolling_std, sma  # noqa: E402
 
 SLEEVES = [
     ("bbmrt_eurusd", "EUR_USD", "bbmrt"),
@@ -88,12 +88,35 @@ H1_SLEEVES = [
     ("ema_h1_euraud",  "EUR_AUD"),
     ("ema_h1_audsgd",  "AUD_SGD"),
 ]
-ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES))
-RISK_PCT    = 0.20   # M30 BBMRT risk -- revert to 0.01 for funded account
-H1_RISK_PCT = 0.10   # H1 EMA risk -- lower due to higher drawdown profile
+MACD_H1_SLEEVES = [
+    # Pairs passing MACD H1 backtest that are NOT already covered by EMA H1
+    ("macd_h1_usdjpy", "USD_JPY"),
+    ("macd_h1_eurcad", "EUR_CAD"),
+    ("macd_h1_gbpcad", "GBP_CAD"),
+    ("macd_h1_gbpchf", "GBP_CHF"),
+]
+ORB_SLEEVES = [
+    # Opening Range Breakout -- London (08:00 UTC) + NY (13:00 UTC) sessions
+    ("orb_m30_eurjpy", "EUR_JPY"),
+    ("orb_m30_chfjpy", "CHF_JPY"),
+    ("orb_m30_cadjpy", "CAD_JPY"),
+    ("orb_m30_audjpy", "AUD_JPY"),
+    ("orb_m30_gbpjpy", "GBP_JPY"),
+    ("orb_m30_nzdjpy", "NZD_JPY"),
+    ("orb_m30_audchf", "AUD_CHF"),
+    ("orb_m30_euraud", "EUR_AUD"),
+    ("orb_m30_usdjpy", "USD_JPY"),
+    ("orb_m30_eurcad", "EUR_CAD"),
+]
+ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES))
+RISK_PCT     = 0.25   # M30 BBMRT risk -- revert to 0.01 for funded account
+H1_RISK_PCT  = 0.25   # H1 EMA + MACD H1 risk
+ORB_RISK_PCT = 0.25   # ORB intraday risk
+ORB_TP_MULT  = 1.5    # TP = 1.5x the opening range width
+_ORB_SESSION_HOURS = {8, 13}  # UTC: London open, NY open
 WARMUP_CANDLES = 500
 M30_WARMUP = 100
-H1_WARMUP  = 200     # H1 bars needed for EMA(30) warmup
+H1_WARMUP  = 200     # H1 bars needed for EMA(30)/MACD(26) warmup
 
 
 def _log(msg: str) -> None:
@@ -443,6 +466,69 @@ def run_bbmrt_m30_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleev
         _log(f"{tag}: no M30 entry signal (RSI crossover not triggered at this run time)")
 
 
+def run_orb_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
+    """Opening Range Breakout on M30. Silently skips unless the second-to-last
+    completed bar was a session open (08:00 or 13:00 UTC). Entry when the
+    following bar breaks the opening range; SL = opposite end of range."""
+    raw = b.get_candles(instrument, granularity="M30", count=10)
+    completed = []
+    for c in raw:
+        if not c["complete"]:
+            continue
+        mid = c["mid"]
+        t = pd.to_datetime(c["time"])
+        t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+        completed.append({"time": t, "High": float(mid["h"]), "Low": float(mid["l"]), "Close": float(mid["c"])})
+
+    if len(completed) < 2:
+        return
+
+    or_bar     = completed[-2]
+    signal_bar = completed[-1]
+    if or_bar["time"].hour not in _ORB_SESSION_HOURS or or_bar["time"].minute != 0:
+        return  # not a session-open bar; silent exit (fires every 30 min)
+
+    or_high  = or_bar["High"]
+    or_low   = or_bar["Low"]
+    or_range = or_high - or_low
+    if or_range <= 0:
+        return
+
+    session  = "London" if or_bar["time"].hour == 8 else "NY"
+    price    = signal_bar["Close"]
+    _log(f"{tag}: ORB {session} -- or_high={or_high:.5f} or_low={or_low:.5f} price={price:.5f}")
+
+    trade = _tagged_trade(b, instrument, tag)
+    if trade is not None:
+        is_long = float(trade["currentUnits"]) > 0
+        _log(f"{tag}: already in {'LONG' if is_long else 'SHORT'} -- ORB SL/TP governs exit")
+        return
+
+    stop_dist   = or_range
+    risk_amount = sleeve_equity * ORB_RISK_PCT
+    units       = int(risk_amount / stop_dist)
+    if units <= 0:
+        _log(f"{tag}: computed size <= 0, skipping")
+        return
+
+    if price > or_high:
+        if _opposite_direction_conflict(b, instrument, tag, "long"):
+            return
+        sl = or_low
+        tp = price + ORB_TP_MULT * or_range
+        _log(f"{tag}: BUY ORB breakout -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+    elif price < or_low:
+        if _opposite_direction_conflict(b, instrument, tag, "short"):
+            return
+        sl = or_high
+        tp = price - ORB_TP_MULT * or_range
+        _log(f"{tag}: SELL ORB breakout -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
+    else:
+        _log(f"{tag}: no ORB breakout (price inside range)")
+
+
 def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
     """H1 EMA(10/30) crossover with ATR-based SL/TP. Runs hourly."""
     h1 = _load_h1_bars(b, instrument)
@@ -502,11 +588,68 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
         _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
 
 
+def run_macd_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
+    """H1 MACD(12,26,9) signal-line crossover. SL=1.5xATR, TP=2.5xATR."""
+    h1 = _load_h1_bars(b, instrument)
+    if len(h1) < 40:
+        _log(f"{tag}: not enough H1 history ({len(h1)} bars), skipping")
+        return
+
+    ml, sig = macd(h1["Close"], 12, 26, 9)
+    a        = atr(h1["High"], h1["Low"], h1["Close"], 14)
+
+    price    = h1["Close"].iloc[-1]
+    av       = a.iloc[-1]
+    ml_now   = ml.iloc[-1];  ml_prev  = ml.iloc[-2]
+    sig_now  = sig.iloc[-1]; sig_prev = sig.iloc[-2]
+    cross_up = ml_prev <= sig_prev and ml_now > sig_now
+    cross_dn = ml_prev >= sig_prev and ml_now < sig_now
+
+    trade = _tagged_trade(b, instrument, tag)
+    if trade is not None:
+        is_long = float(trade["currentUnits"]) > 0
+        _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f}")
+        flips = cross_dn if is_long else cross_up
+        if flips:
+            _log(f"{tag}: opposite MACD cross -- closing to flip")
+            _close_and_journal(b, trade["id"], tag, instrument, "opposite_crossover")
+        else:
+            _log(f"{tag}: holding -- broker SL/TP governs exit")
+            return
+
+    if av != av or av <= 0:
+        _log(f"{tag}: ATR not ready, skipping")
+        return
+    if not (cross_up or cross_dn):
+        _log(f"{tag}: no MACD crossover signal")
+        return
+
+    stop_dist   = 1.5 * av
+    risk_amount = sleeve_equity * H1_RISK_PCT
+    units       = int(risk_amount / stop_dist)
+    if units <= 0:
+        _log(f"{tag}: computed size <= 0, skipping")
+        return
+
+    direction = "long" if cross_up else "short"
+    if _opposite_direction_conflict(b, instrument, tag, direction):
+        return
+
+    if cross_up:
+        sl, tp = price - stop_dist, price + 2.5 * av
+        _log(f"{tag}: BUY MACD cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+    else:
+        sl, tp = price + stop_dist, price - 2.5 * av
+        _log(f"{tag}: SELL MACD cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
+
+
 def main() -> None:
     b = broker.from_env()
     account_equity = float(b.account_summary()["account"]["balance"])
     sleeve_equity = account_equity * ALLOCATION_FRACTION
-    total_sleeves = len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES)
+    total_sleeves = len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES)
     _log(
         f"account equity={account_equity:.2f}, per-sleeve allocation={sleeve_equity:.2f} "
         f"({ALLOCATION_FRACTION:.0%} each across {total_sleeves} sleeves)"
@@ -527,6 +670,16 @@ def main() -> None:
     for tag, instrument in H1_SLEEVES:
         try:
             run_h1_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in MACD_H1_SLEEVES:
+        try:
+            run_macd_h1_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in ORB_SLEEVES:
+        try:
+            run_orb_sleeve(b, tag, instrument, sleeve_equity)
         except Exception as e:
             _log(f"{tag}: ERROR -- {e}")
 

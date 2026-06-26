@@ -35,6 +35,13 @@ def rsi(series, n=14):
     return 100 - (100 / (1 + rs))
 
 
+def macd(series, fast=12, slow=26, signal=9):
+    s = pd.Series(series)
+    macd_line = s.ewm(span=fast, adjust=False).mean() - s.ewm(span=slow, adjust=False).mean()
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
 def _highest(series, n):
     return pd.Series(series).rolling(n).max()
 

@@ -5,7 +5,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import broker
-from live_runner import H1_SLEEVES, ALLOCATION_FRACTION, _log, run_h1_sleeve
+from live_runner import (
+    H1_SLEEVES, MACD_H1_SLEEVES, ALLOCATION_FRACTION,
+    _log, run_h1_sleeve, run_macd_h1_sleeve,
+)
 
 
 def main() -> None:
@@ -21,6 +24,11 @@ def main() -> None:
     for tag, instrument in H1_SLEEVES:
         try:
             run_h1_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in MACD_H1_SLEEVES:
+        try:
+            run_macd_h1_sleeve(b, tag, instrument, sleeve_equity)
         except Exception as e:
             _log(f"{tag}: ERROR -- {e}")
 
