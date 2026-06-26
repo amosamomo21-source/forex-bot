@@ -87,6 +87,26 @@ H1_SLEEVES = [
     ("ema_h1_audchf",  "AUD_CHF"),
     ("ema_h1_euraud",  "EUR_AUD"),
     ("ema_h1_audsgd",  "AUD_SGD"),
+    ("ema_h1_wticousd",  "WTICO_USD"),
+    ("ema_h1_bcousd",    "BCO_USD"),
+    ("ema_h1_xauusd",    "XAU_USD"),
+    ("ema_h1_xagusd",    "XAG_USD"),
+    ("ema_h1_xcuusd",    "XCU_USD"),
+    ("ema_h1_xptusd",    "XPT_USD"),
+    ("ema_h1_natgasusd", "NATGAS_USD"),
+    ("ema_h1_cornusd",   "CORN_USD"),
+    ("ema_h1_soybused",  "SOYBN_USD"),
+    ("ema_h1_wheatusd",  "WHEAT_USD"),
+    ("ema_h1_sugarusd",  "SUGAR_USD"),
+    # Stock indices -- session hours naturally limit signals (flat candles outside market hours)
+    ("ema_h1_spx500",   "SPX500_USD"),
+    ("ema_h1_nas100",   "NAS100_USD"),
+    ("ema_h1_us30",     "US30_USD"),
+    ("ema_h1_us2000",   "US2000_USD"),
+    ("ema_h1_de30",     "DE30_EUR"),
+    ("ema_h1_eu50",     "EU50_EUR"),
+    ("ema_h1_jp225",    "JP225_USD"),
+    ("ema_h1_au200",    "AU200_AUD"),
 ]
 MACD_H1_SLEEVES = [
     # Pairs passing MACD H1 backtest that are NOT already covered by EMA H1
