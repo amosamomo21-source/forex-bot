@@ -77,43 +77,26 @@ M30_SLEEVES = [
     ("bbmrt_m30_nzdjpy", "NZD_JPY"),
 ]
 H1_SLEEVES = [
-    ("ema_h1_gbpusd",  "GBP_USD"),
-    ("ema_h1_eurjpy",  "EUR_JPY"),
-    ("ema_h1_chfjpy",  "CHF_JPY"),
-    ("ema_h1_cadjpy",  "CAD_JPY"),
-    ("ema_h1_audjpy",  "AUD_JPY"),
-    ("ema_h1_gbpjpy",  "GBP_JPY"),
-    ("ema_h1_nzdjpy",  "NZD_JPY"),
-    ("ema_h1_audchf",  "AUD_CHF"),
-    ("ema_h1_euraud",  "EUR_AUD"),
-    ("ema_h1_audsgd",  "AUD_SGD"),
+    # Forex -- backtest PASS both 5y and 10y with trailing stop
+    ("ema_h1_gbpusd",    "GBP_USD"),
+    ("ema_h1_cadjpy",    "CAD_JPY"),
+    ("ema_h1_audjpy",    "AUD_JPY"),
+    # Commodities -- backtest PASS both periods
     ("ema_h1_wticousd",  "WTICO_USD"),
     ("ema_h1_bcousd",    "BCO_USD"),
     ("ema_h1_xauusd",    "XAU_USD"),
     ("ema_h1_xagusd",    "XAG_USD"),
-    ("ema_h1_xcuusd",    "XCU_USD"),
-    ("ema_h1_xptusd",    "XPT_USD"),
     ("ema_h1_natgasusd", "NATGAS_USD"),
     ("ema_h1_cornusd",   "CORN_USD"),
-    ("ema_h1_soybused",  "SOYBN_USD"),
     ("ema_h1_wheatusd",  "WHEAT_USD"),
-    ("ema_h1_sugarusd",  "SUGAR_USD"),
-    # Stock indices -- session hours naturally limit signals (flat candles outside market hours)
-    ("ema_h1_spx500",   "SPX500_USD"),
-    ("ema_h1_nas100",   "NAS100_USD"),
-    ("ema_h1_us30",     "US30_USD"),
-    ("ema_h1_us2000",   "US2000_USD"),
-    ("ema_h1_de30",     "DE30_EUR"),
-    ("ema_h1_eu50",     "EU50_EUR"),
-    ("ema_h1_jp225",    "JP225_USD"),
-    ("ema_h1_au200",    "AU200_AUD"),
+    # Indices -- backtest PASS both periods
+    ("ema_h1_nas100",    "NAS100_USD"),
+    ("ema_h1_de30",      "DE30_EUR"),
+    ("ema_h1_jp225",     "JP225_USD"),
 ]
 MACD_H1_SLEEVES = [
-    # Pairs passing MACD H1 backtest that are NOT already covered by EMA H1
+    # USD_JPY only -- EUR_CAD, GBP_CAD, GBP_CHF failed 10y backtest with trailing stop
     ("macd_h1_usdjpy", "USD_JPY"),
-    ("macd_h1_eurcad", "EUR_CAD"),
-    ("macd_h1_gbpcad", "GBP_CAD"),
-    ("macd_h1_gbpchf", "GBP_CHF"),
 ]
 ORB_SLEEVES = [
     # Opening Range Breakout -- London (08:00 UTC) + NY (13:00 UTC) sessions
