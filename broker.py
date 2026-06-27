@@ -123,6 +123,13 @@ class OandaBroker:
         self.api.request(r)
         return r.response
 
+    def update_trade_sl(self, trade_id: str, sl_price: float) -> dict:
+        """Move the stop loss on an existing trade -- used for trailing stops."""
+        data = {"stopLoss": {"price": f"{sl_price:.5f}", "timeInForce": "GTC"}}
+        r = trades.TradeCRCDO(accountID=self.account_id, tradeID=trade_id, data=data)
+        self.api.request(r)
+        return r.response
+
     def close_trade(self, trade_id: str) -> dict:
         """Closes one specific trade by ID, leaving any other open trades on
         the same instrument (e.g. belonging to a different tagged strategy)

@@ -128,15 +128,35 @@ ORB_SLEEVES = [
     ("orb_m30_usdjpy", "USD_JPY"),
     ("orb_m30_eurcad", "EUR_CAD"),
 ]
-ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES))
+PDHL_SLEEVES = [
+    # Previous Day High/Low breakout -- H1 entry, fires hourly
+    ("pdhl_gbpusd",   "GBP_USD"),
+    ("pdhl_eurjpy",   "EUR_JPY"),
+    ("pdhl_chfjpy",   "CHF_JPY"),
+    ("pdhl_audjpy",   "AUD_JPY"),
+    ("pdhl_gbpjpy",   "GBP_JPY"),
+    ("pdhl_nzdjpy",   "NZD_JPY"),
+    ("pdhl_usdjpy",   "USD_JPY"),
+    ("pdhl_bcousd",   "BCO_USD"),
+    ("pdhl_xauusd",   "XAU_USD"),
+    ("pdhl_xagusd",   "XAG_USD"),
+    ("pdhl_natgas",   "NATGAS_USD"),
+    ("pdhl_spx500",   "SPX500_USD"),
+    ("pdhl_nas100",   "NAS100_USD"),
+    ("pdhl_us30",     "US30_USD"),
+]
+ALLOCATION_FRACTION = 1 / (len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES) + len(PDHL_SLEEVES))
 RISK_PCT     = 0.25   # M30 BBMRT risk -- revert to 0.01 for funded account
 H1_RISK_PCT  = 0.25   # H1 EMA + MACD H1 risk
 ORB_RISK_PCT = 0.25   # ORB intraday risk
 ORB_TP_MULT  = 1.5    # TP = 1.5x the opening range width
 _ORB_SESSION_HOURS = {8, 13}  # UTC: London open, NY open
+TRAIL_MULT   = 2.0    # ATR multiplier for trailing stop on H1 EMA/MACD
+MIN_ATR_PCT  = 0.0008 # volatility filter: skip if ATR < 0.08% of price
 WARMUP_CANDLES = 500
 M30_WARMUP = 100
 H1_WARMUP  = 200     # H1 bars needed for EMA(30)/MACD(26) warmup
+W_WARMUP   = 15      # weekly bars for trend filter
 
 
 def _log(msg: str) -> None:
@@ -153,6 +173,21 @@ def _load_h1_bars(b: broker.OandaBroker, instrument: str) -> pd.DataFrame:
         mid = c["mid"]
         rows.append({"time": c["time"], "Open": float(mid["o"]),
                      "High": float(mid["h"]), "Low": float(mid["l"]), "Close": float(mid["c"])})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["time"] = pd.to_datetime(df["time"])
+    return df.set_index("time")
+
+
+def _load_weekly_bars(b: broker.OandaBroker, instrument: str) -> pd.DataFrame:
+    raw = b.get_candles(instrument, granularity="W", count=W_WARMUP)
+    rows = []
+    for c in raw:
+        if not c["complete"]:
+            continue
+        mid = c["mid"]
+        rows.append({"time": c["time"], "Close": float(mid["c"])})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -550,7 +585,9 @@ def run_orb_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equi
 
 
 def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
-    """H1 EMA(10/30) crossover with ATR-based SL/TP. Runs hourly."""
+    """H1 EMA(10/30) crossover. Trailing stop replaces fixed TP.
+    Volatility filter skips entries when ATR is too small.
+    Weekly EMA trend filter gates entry direction."""
     h1 = _load_h1_bars(b, instrument)
     if len(h1) < 35:
         _log(f"{tag}: not enough H1 history ({len(h1)} bars), skipping")
@@ -560,24 +597,35 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
     slow = ema(h1["Close"], 30)
     a    = atr(h1["High"], h1["Low"], h1["Close"], 14)
 
-    price     = h1["Close"].iloc[-1]
-    av        = a.iloc[-1]
-    fast_now  = fast.iloc[-1]; fast_prev = fast.iloc[-2]
-    slow_now  = slow.iloc[-1]; slow_prev = slow.iloc[-2]
-    cross_up  = fast_prev <= slow_prev and fast_now > slow_now
-    cross_dn  = fast_prev >= slow_prev and fast_now < slow_now
+    price    = h1["Close"].iloc[-1]
+    av       = a.iloc[-1]
+    fast_now = fast.iloc[-1]; fast_prev = fast.iloc[-2]
+    slow_now = slow.iloc[-1]; slow_prev = slow.iloc[-2]
+    cross_up = fast_prev <= slow_prev and fast_now > slow_now
+    cross_dn = fast_prev >= slow_prev and fast_now < slow_now
 
     trade = _tagged_trade(b, instrument, tag)
 
     if trade is not None:
         is_long = float(trade["currentUnits"]) > 0
         _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f}")
+        # Trailing stop -- ratchet SL toward price each hour
+        if av > 0:
+            trail = price - TRAIL_MULT * av if is_long else price + TRAIL_MULT * av
+            current_sl = float(trade.get("stopLossOrder", {}).get("price", 0))
+            if is_long and trail > current_sl:
+                b.update_trade_sl(trade["id"], trail)
+                _log(f"{tag}: trailing stop raised to {trail:.5f}")
+            elif not is_long and trail < current_sl:
+                b.update_trade_sl(trade["id"], trail)
+                _log(f"{tag}: trailing stop lowered to {trail:.5f}")
+        # Flip on opposite crossover
         flips = cross_dn if is_long else cross_up
         if flips:
             _log(f"{tag}: opposite H1 crossover -- closing to flip")
             _close_and_journal(b, trade["id"], tag, instrument, "opposite_crossover")
         else:
-            _log(f"{tag}: holding -- broker SL/TP governs exit")
+            _log(f"{tag}: holding")
             return
 
     if av != av or av <= 0:
@@ -586,6 +634,26 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
     if not (cross_up or cross_dn):
         _log(f"{tag}: no H1 crossover signal")
         return
+
+    # Volatility filter
+    if av < price * MIN_ATR_PCT:
+        _log(f"{tag}: ATR too low ({av:.5f}) -- skipping low-volatility entry")
+        return
+
+    # Weekly trend filter
+    try:
+        wk = _load_weekly_bars(b, instrument)
+        if len(wk) >= 2:
+            w_ema = ema(wk["Close"], 10)
+            w_trend_up = w_ema.iloc[-1] > w_ema.iloc[-2]
+            if cross_up and not w_trend_up:
+                _log(f"{tag}: weekly trend is DOWN -- skipping BUY signal")
+                return
+            if cross_dn and w_trend_up:
+                _log(f"{tag}: weekly trend is UP -- skipping SELL signal")
+                return
+    except Exception:
+        pass  # weekly filter optional -- proceed if data unavailable
 
     stop_dist   = 1.5 * av
     risk_amount = sleeve_equity * H1_RISK_PCT
@@ -599,13 +667,13 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
         return
 
     if cross_up:
-        sl, tp = price - stop_dist, price + 2.5 * av
-        _log(f"{tag}: BUY H1 EMA cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
-        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+        sl = price - stop_dist
+        _log(f"{tag}: BUY H1 EMA cross -- {units} units sl={sl:.5f} (trailing, no fixed TP)")
+        _open_and_journal(b, tag, instrument, units, "long", sl)
     else:
-        sl, tp = price + stop_dist, price - 2.5 * av
-        _log(f"{tag}: SELL H1 EMA cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
-        _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
+        sl = price + stop_dist
+        _log(f"{tag}: SELL H1 EMA cross -- {units} units sl={sl:.5f} (trailing, no fixed TP)")
+        _open_and_journal(b, tag, instrument, -units, "short", sl)
 
 
 def run_macd_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
@@ -629,12 +697,21 @@ def run_macd_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_
     if trade is not None:
         is_long = float(trade["currentUnits"]) > 0
         _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f}")
+        if av > 0:
+            trail = price - TRAIL_MULT * av if is_long else price + TRAIL_MULT * av
+            current_sl = float(trade.get("stopLossOrder", {}).get("price", 0))
+            if is_long and trail > current_sl:
+                b.update_trade_sl(trade["id"], trail)
+                _log(f"{tag}: trailing stop raised to {trail:.5f}")
+            elif not is_long and trail < current_sl:
+                b.update_trade_sl(trade["id"], trail)
+                _log(f"{tag}: trailing stop lowered to {trail:.5f}")
         flips = cross_dn if is_long else cross_up
         if flips:
             _log(f"{tag}: opposite MACD cross -- closing to flip")
             _close_and_journal(b, trade["id"], tag, instrument, "opposite_crossover")
         else:
-            _log(f"{tag}: holding -- broker SL/TP governs exit")
+            _log(f"{tag}: holding")
             return
 
     if av != av or av <= 0:
@@ -642,6 +719,10 @@ def run_macd_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_
         return
     if not (cross_up or cross_dn):
         _log(f"{tag}: no MACD crossover signal")
+        return
+
+    if av < price * MIN_ATR_PCT:
+        _log(f"{tag}: ATR too low ({av:.5f}) -- skipping low-volatility entry")
         return
 
     stop_dist   = 1.5 * av
@@ -656,20 +737,78 @@ def run_macd_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_
         return
 
     if cross_up:
-        sl, tp = price - stop_dist, price + 2.5 * av
-        _log(f"{tag}: BUY MACD cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
-        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+        sl = price - stop_dist
+        _log(f"{tag}: BUY MACD cross -- {units} units sl={sl:.5f} (trailing, no fixed TP)")
+        _open_and_journal(b, tag, instrument, units, "long", sl)
     else:
-        sl, tp = price + stop_dist, price - 2.5 * av
-        _log(f"{tag}: SELL MACD cross -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        sl = price + stop_dist
+        _log(f"{tag}: SELL MACD cross -- {units} units sl={sl:.5f} (trailing, no fixed TP)")
+        _open_and_journal(b, tag, instrument, -units, "short", sl)
+
+
+def run_pdhl_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equity: float) -> None:
+    """Previous Day High/Low breakout. Checks hourly: enter when H1 close
+    breaks above yesterday's high (BUY) or below yesterday's low (SELL).
+    SL = midpoint of yesterday's range. TP = 1.5x range beyond entry."""
+    d1_raw = b.get_candles(instrument, granularity="D", count=3)
+    d1_bars = [c for c in d1_raw if c["complete"]]
+    if not d1_bars:
+        return
+
+    yesterday  = d1_bars[-1]
+    prev_high  = float(yesterday["mid"]["h"])
+    prev_low   = float(yesterday["mid"]["l"])
+    prev_mid   = (prev_high + prev_low) / 2
+    prev_rng   = prev_high - prev_low
+    if prev_rng <= 0:
+        return
+
+    h1_raw = b.get_candles(instrument, granularity="H1", count=3)
+    h1_bars = [c for c in h1_raw if c["complete"]]
+    if not h1_bars:
+        return
+    price = float(h1_bars[-1]["mid"]["c"])
+
+    trade = _tagged_trade(b, instrument, tag)
+    if trade is not None:
+        is_long = float(trade["currentUnits"]) > 0
+        _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f} -- PDH/PDL SL/TP governs exit")
+        return
+
+    _log(f"{tag}: PDH/PDL prev_high={prev_high:.5f} prev_low={prev_low:.5f} price={price:.5f}")
+
+    stop_dist   = abs(price - prev_mid)
+    if stop_dist <= 0:
+        return
+    risk_amount = sleeve_equity * H1_RISK_PCT
+    units       = int(risk_amount / stop_dist)
+    if units <= 0:
+        _log(f"{tag}: computed size <= 0, skipping")
+        return
+
+    if price > prev_high:
+        if _opposite_direction_conflict(b, instrument, tag, "long"):
+            return
+        sl = prev_mid
+        tp = price + 1.5 * prev_rng
+        _log(f"{tag}: BUY PDH breakout -- {units} units sl={sl:.5f} tp={tp:.5f}")
+        _open_and_journal(b, tag, instrument, units, "long", sl, tp)
+    elif price < prev_low:
+        if _opposite_direction_conflict(b, instrument, tag, "short"):
+            return
+        sl = prev_mid
+        tp = price - 1.5 * prev_rng
+        _log(f"{tag}: SELL PDL breakout -- {units} units sl={sl:.5f} tp={tp:.5f}")
         _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
+    else:
+        _log(f"{tag}: price inside yesterday's range -- no signal")
 
 
 def main() -> None:
     b = broker.from_env()
     account_equity = float(b.account_summary()["account"]["balance"])
     sleeve_equity = account_equity * ALLOCATION_FRACTION
-    total_sleeves = len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES)
+    total_sleeves = len(SLEEVES) + len(M30_SLEEVES) + len(H1_SLEEVES) + len(MACD_H1_SLEEVES) + len(ORB_SLEEVES) + len(PDHL_SLEEVES)
     _log(
         f"account equity={account_equity:.2f}, per-sleeve allocation={sleeve_equity:.2f} "
         f"({ALLOCATION_FRACTION:.0%} each across {total_sleeves} sleeves)"
@@ -700,6 +839,11 @@ def main() -> None:
     for tag, instrument in ORB_SLEEVES:
         try:
             run_orb_sleeve(b, tag, instrument, sleeve_equity)
+        except Exception as e:
+            _log(f"{tag}: ERROR -- {e}")
+    for tag, instrument in PDHL_SLEEVES:
+        try:
+            run_pdhl_sleeve(b, tag, instrument, sleeve_equity)
         except Exception as e:
             _log(f"{tag}: ERROR -- {e}")
 
