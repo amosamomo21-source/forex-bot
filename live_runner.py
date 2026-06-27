@@ -37,6 +37,7 @@ allow_live=True here.
 
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -136,6 +137,9 @@ ORB_TP_MULT  = 1.5    # TP = 1.5x the opening range width
 _ORB_SESSION_HOURS = {8, 13}  # UTC: London open, NY open
 TRAIL_MULT   = 2.0    # ATR multiplier for trailing stop on H1 EMA/MACD
 MIN_ATR_PCT  = 0.0008 # volatility filter: skip if ATR < 0.08% of price
+H1_SL_MULT   = 1.5    # initial SL distance for H1 EMA entries
+ADX_MIN      = 20     # ADX filter: skip H1 EMA entry if trend too weak
+BE_TRIGGER   = 1.0    # break-even: floor SL at entry once price moves 1R in profit
 WARMUP_CANDLES = 500
 M30_WARMUP = 100
 H1_WARMUP  = 200     # H1 bars needed for EMA(30)/MACD(26) warmup
@@ -590,12 +594,21 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
     trade = _tagged_trade(b, instrument, tag)
 
     if trade is not None:
-        is_long = float(trade["currentUnits"]) > 0
+        is_long    = float(trade["currentUnits"]) > 0
+        entry_p    = float(trade.get("price", 0))
+        current_sl = float(trade.get("stopLossOrder", {}).get("price", 0))
         _log(f"{tag}: in {'LONG' if is_long else 'SHORT'} since {trade['openTime']}, price={price:.5f}")
-        # Trailing stop -- ratchet SL toward price each hour
         if av > 0:
             trail = price - TRAIL_MULT * av if is_long else price + TRAIL_MULT * av
-            current_sl = float(trade.get("stopLossOrder", {}).get("price", 0))
+            # Break-even: once 1R profit reached, floor SL at entry
+            if is_long:
+                if price >= entry_p + BE_TRIGGER * H1_SL_MULT * av and current_sl < entry_p:
+                    trail = max(trail, entry_p)
+                    _log(f"{tag}: break-even triggered -- SL floored at entry {entry_p:.5f}")
+            else:
+                if price <= entry_p - BE_TRIGGER * H1_SL_MULT * av and current_sl > entry_p:
+                    trail = min(trail, entry_p)
+                    _log(f"{tag}: break-even triggered -- SL capped at entry {entry_p:.5f}")
             if is_long and trail > current_sl:
                 b.update_trade_sl(trade["id"], trail)
                 _log(f"{tag}: trailing stop raised to {trail:.5f}")
@@ -638,7 +651,7 @@ def run_h1_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equit
     except Exception:
         pass  # weekly filter optional -- proceed if data unavailable
 
-    stop_dist   = 1.5 * av
+    stop_dist   = H1_SL_MULT * av
     risk_amount = sleeve_equity * H1_RISK_PCT
     units       = int(risk_amount / stop_dist)
     if units <= 0:

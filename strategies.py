@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from backtesting import Strategy
 from backtesting.lib import crossover
@@ -40,6 +41,23 @@ def macd(series, fast=12, slow=26, signal=9):
     macd_line = s.ewm(span=fast, adjust=False).mean() - s.ewm(span=slow, adjust=False).mean()
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return macd_line, signal_line
+
+
+def adx(high, low, close, n=14):
+    high, low, close = pd.Series(high), pd.Series(low), pd.Series(close)
+    prev_high  = high.shift(1)
+    prev_low   = low.shift(1)
+    prev_close = close.shift(1)
+    up = high - prev_high
+    dn = prev_low - low
+    plus_dm  = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=low.index)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    atr_s    = tr.ewm(alpha=1/n, adjust=False).mean()
+    plus_di  = 100 * plus_dm.ewm(alpha=1/n, adjust=False).mean()  / atr_s
+    minus_di = 100 * minus_dm.ewm(alpha=1/n, adjust=False).mean() / atr_s
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-12)
+    return dx.ewm(alpha=1/n, adjust=False).mean()
 
 
 def _highest(series, n):
