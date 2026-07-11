@@ -26,6 +26,21 @@ class LiveTradingNotConfirmedError(Exception):
     pass
 
 
+def _fmt_price(instrument: str, price: float) -> str:
+    """Format price with the correct decimal precision for a given OANDA instrument."""
+    if "JPY" in instrument:
+        return f"{price:.3f}"
+    if instrument in ("SPX500_USD", "NAS100_USD", "US30_USD", "DE30_EUR"):
+        return f"{price:.1f}"
+    if instrument == "JP225_USD":
+        return f"{price:.0f}"
+    if instrument in ("XAU_USD", "CORN_USD", "WHEAT_USD", "BCO_USD", "WTICO_USD", "NATGAS_USD"):
+        return f"{price:.2f}"
+    if instrument in ("XAG_USD",):
+        return f"{price:.4f}"
+    return f"{price:.5f}"
+
+
 class OandaBroker:
     def __init__(self, api_token: str, account_id: str, allow_live: bool = False):
         self.account_id = account_id
@@ -110,6 +125,15 @@ class OandaBroker:
             out = [t for t in out if t["instrument"] == instrument]
         return out
 
+    def get_closed_trades(self, instrument: str | None = None, count: int = 10) -> list:
+        """Fetch recently closed trades, optionally filtered to one instrument."""
+        params = {"state": "CLOSED", "count": str(count)}
+        if instrument:
+            params["instrument"] = instrument
+        r = trades.TradesList(accountID=self.account_id, params=params)
+        self.api.request(r)
+        return r.response.get("trades", [])
+
     def close_position(self, instrument: str) -> dict:
         """Closes the entire open position on `instrument` (whichever side --
         long or short -- is actually open). Only safe when at most one
@@ -123,9 +147,9 @@ class OandaBroker:
         self.api.request(r)
         return r.response
 
-    def update_trade_sl(self, trade_id: str, sl_price: float) -> dict:
+    def update_trade_sl(self, trade_id: str, sl_price: float, instrument: str = "") -> dict:
         """Move the stop loss on an existing trade -- used for trailing stops."""
-        data = {"stopLoss": {"price": f"{sl_price:.5f}", "timeInForce": "GTC"}}
+        data = {"stopLoss": {"price": _fmt_price(instrument, sl_price), "timeInForce": "GTC"}}
         r = trades.TradeCRCDO(accountID=self.account_id, tradeID=trade_id, data=data)
         self.api.request(r)
         return r.response
@@ -161,9 +185,9 @@ class OandaBroker:
             }
         }
         if stop_loss_price is not None:
-            order["order"]["stopLossOnFill"] = {"price": f"{stop_loss_price:.5f}"}
+            order["order"]["stopLossOnFill"] = {"price": _fmt_price(instrument, stop_loss_price)}
         if take_profit_price is not None:
-            order["order"]["takeProfitOnFill"] = {"price": f"{take_profit_price:.5f}"}
+            order["order"]["takeProfitOnFill"] = {"price": _fmt_price(instrument, take_profit_price)}
         if client_tag is not None:
             order["order"]["tradeClientExtensions"] = {"tag": client_tag}
 

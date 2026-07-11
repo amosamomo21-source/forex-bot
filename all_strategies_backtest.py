@@ -74,12 +74,10 @@ def _print_table(results, header):
 # ─────────────────────────────────────────────────────────────
 
 H1_EMA_PAIRS = [
-    "GBP_USD", "EUR_JPY", "CHF_JPY", "CAD_JPY", "AUD_JPY",
-    "GBP_JPY", "NZD_JPY", "AUD_CHF", "EUR_AUD", "AUD_SGD",
-    "WTICO_USD", "BCO_USD", "XAU_USD", "XAG_USD", "XCU_USD",
-    "XPT_USD", "NATGAS_USD", "CORN_USD", "SOYBN_USD", "WHEAT_USD", "SUGAR_USD",
-    "SPX500_USD", "NAS100_USD", "US30_USD", "US2000_USD",
-    "DE30_EUR", "EU50_EUR", "JP225_USD", "AU200_AUD",
+    # Current live H1_SLEEVES (13 pairs -- 16 cut after backtest review)
+    "GBP_USD", "CAD_JPY", "AUD_JPY",
+    "WTICO_USD", "BCO_USD", "XAU_USD", "XAG_USD", "NATGAS_USD", "CORN_USD", "WHEAT_USD",
+    "NAS100_USD", "DE30_EUR", "JP225_USD",
 ]
 
 
@@ -165,7 +163,7 @@ h1_ema_good = _print_table(h1_ema_results, "H1 EMA (10/30) — trailing stop, vo
 # 2. MACD H1  (trailing stop + vol filter)
 # ─────────────────────────────────────────────────────────────
 
-MACD_PAIRS = ["USD_JPY", "EUR_CAD", "GBP_CAD", "GBP_CHF"]
+MACD_PAIRS = ["USD_JPY"]  # only passing pair; EUR_CAD/GBP_CAD/GBP_CHF cut
 
 
 def _macd_backtest(pair, period):
@@ -463,18 +461,157 @@ m30_good = _print_table(m30_results, "M30 BBMRT — daily BB(20,1.5)+EMA(100) bi
 
 
 # ─────────────────────────────────────────────────────────────
+# 6. Daily BBMRT  (BB(20,1.5) + EMA(100) trend filter, exit at mean)
+# ─────────────────────────────────────────────────────────────
+
+DAILY_BBMRT_PAIRS = ["EUR_USD", "GBP_USD"]
+BB_K_D   = 1.5
+BB_PER_D = 20
+TREND_D  = 100
+SL_D     = 2.0
+MAX_HOLD = 20
+
+
+def _daily_bbmrt_backtest(pair, period):
+    df = load_oanda_data(pair, period=period, interval="1d")
+    if df is None or len(df) < TREND_D + 5:
+        return None
+
+    bb_mid = sma(df["Close"], BB_PER_D)
+    bb_std = rolling_std(df["Close"], BB_PER_D)
+    trend  = ema(df["Close"], TREND_D)
+    atr_s  = atr(df["High"], df["Low"], df["Close"], 14)
+
+    equity = INITIAL; position = 0; entry_price = sl = 0.0; bars_held = 0; trades = []
+    initial_sl_dist = 0.0
+
+    for i in range(1, len(df)):
+        price = df["Close"].iloc[i]
+        mid   = bb_mid.iloc[i]; sd = bb_std.iloc[i]; t = trend.iloc[i]; av = atr_s.iloc[i]
+        if any(np.isnan(x) for x in [mid, sd, t, av]) or sd == 0 or av <= 0:
+            continue
+
+        lower = mid - BB_K_D * sd
+        upper = mid + BB_K_D * sd
+
+        if position != 0:
+            bars_held += 1
+            sl_hit   = (position == 1 and price <= sl) or (position == -1 and price >= sl)
+            mean_hit = (position == 1 and price >= mid) or (position == -1 and price <= mid)
+            time_up  = bars_held >= MAX_HOLD
+            if sl_hit or mean_hit or time_up:
+                exit_p = sl if sl_hit else price
+                pnl_r  = position * (exit_p - entry_price) / initial_sl_dist if initial_sl_dist > 0 else 0
+                trades.append(pnl_r * equity * RISK_PCT)
+                equity += trades[-1]; position = 0; bars_held = 0
+            continue
+
+        stop_dist = SL_D * av
+        units = min(equity * RISK_PCT / stop_dist, equity * MAX_LEV / price)
+        if units <= 0:
+            continue
+
+        if price < lower and price > t:
+            position = 1;  entry_price = price; sl = price - stop_dist; initial_sl_dist = stop_dist
+        elif price > upper and price < t:
+            position = -1; entry_price = price; sl = price + stop_dist; initial_sl_dist = stop_dist
+
+    return _result_row(trades, period)
+
+
+print("\nRunning Daily BBMRT backtest...")
+daily_bbmrt_results = []
+for pair in DAILY_BBMRT_PAIRS:
+    r5  = _daily_bbmrt_backtest(pair, "5y")
+    r10 = _daily_bbmrt_backtest(pair, "10y")
+    daily_bbmrt_results.append((pair, r5, r10))
+    print(f"  {pair} done")
+
+daily_bbmrt_good = _print_table(daily_bbmrt_results, "Daily BBMRT — BB(20,1.5)+EMA(100), exit at mean [2 live pairs]")
+
+
+# ─────────────────────────────────────────────────────────────
+# 7. Daily EMA  (EMA 20/50, fixed SL=1.5xATR, TP=2.5xATR)
+# ─────────────────────────────────────────────────────────────
+
+DAILY_EMA_PAIRS = ["GBP_USD", "USD_JPY", "AUD_USD"]
+D_FAST   = 20
+D_SLOW   = 50
+D_SL     = 1.5
+D_TP     = 2.5
+
+
+def _daily_ema_backtest(pair, period):
+    df = load_oanda_data(pair, period=period, interval="1d")
+    if df is None or len(df) < D_SLOW + 5:
+        return None
+
+    fast_s = ema(df["Close"], D_FAST)
+    slow_s = ema(df["Close"], D_SLOW)
+    atr_s  = atr(df["High"], df["Low"], df["Close"], 14)
+
+    equity = INITIAL; position = 0; entry_price = sl = tp = 0.0; trades = []
+
+    for i in range(1, len(df)):
+        price = df["Close"].iloc[i]
+        av    = atr_s.iloc[i]
+        fn, fp = fast_s.iloc[i], fast_s.iloc[i-1]
+        sn, sp = slow_s.iloc[i], slow_s.iloc[i-1]
+        if np.isnan(av) or av <= 0:
+            continue
+
+        if position != 0:
+            sl_hit = (position == 1 and price <= sl) or (position == -1 and price >= sl)
+            tp_hit = (position == 1 and price >= tp) or (position == -1 and price <= tp)
+            cross_flip = (position == 1 and fp >= sp and fn < sn) or (position == -1 and fp <= sp and fn > sn)
+            if sl_hit or tp_hit or cross_flip:
+                exit_p = sl if sl_hit else (tp if tp_hit else price)
+                pnl_r  = position * (exit_p - entry_price) / abs(entry_price - sl)
+                trades.append(pnl_r * equity * RISK_PCT)
+                equity += trades[-1]; position = 0
+
+        cross_up = fp <= sp and fn > sn
+        cross_dn = fp >= sp and fn < sn
+        if not (cross_up or cross_dn) or position != 0:
+            continue
+
+        sd = D_SL * av
+        units = min(equity * RISK_PCT / sd, equity * MAX_LEV / price)
+        if units <= 0:
+            continue
+
+        if cross_up:
+            position = 1;  entry_price = price; sl = price - sd; tp = price + D_TP * av
+        else:
+            position = -1; entry_price = price; sl = price + sd; tp = price - D_TP * av
+
+    return _result_row(trades, period)
+
+
+print("\nRunning Daily EMA backtest...")
+daily_ema_results = []
+for pair in DAILY_EMA_PAIRS:
+    r5  = _daily_ema_backtest(pair, "5y")
+    r10 = _daily_ema_backtest(pair, "10y")
+    daily_ema_results.append((pair, r5, r10))
+    print(f"  {pair} done")
+
+daily_ema_good = _print_table(daily_ema_results, "Daily EMA (20/50) — fixed SL=1.5xATR TP=2.5xATR [3 live pairs]")
+
+
+# ─────────────────────────────────────────────────────────────
 # SUMMARY
 # ─────────────────────────────────────────────────────────────
 
 print("\n" + "="*70)
-print("MASTER SUMMARY")
+print("MASTER SUMMARY — all 60 live sleeves")
 print("="*70)
-total_live = 5 + 17 + 29 + 4 + 10 + 14  # daily BBMRT not retested here
-print(f"Daily BBMRT+EMA  :  5 sleeves  (not re-run — uses backtesting library)")
+print(f"Daily BBMRT      : {len(daily_bbmrt_good):>2}/{len(DAILY_BBMRT_PAIRS)} pairs PASS  | live:  2 sleeves")
+print(f"Daily EMA        : {len(daily_ema_good):>2}/{len(DAILY_EMA_PAIRS)} pairs PASS  | live:  3 sleeves")
 print(f"M30 BBMRT        : {len(m30_good):>2}/{len(M30_PAIRS)} pairs PASS  | live: 17 sleeves")
-print(f"H1 EMA           : {len(h1_ema_good):>2}/{len(H1_EMA_PAIRS)} pairs PASS  | live: 29 sleeves")
-print(f"MACD H1          : {len(macd_good):>2}/{len(MACD_PAIRS)} pairs PASS  | live:  4 sleeves")
+print(f"H1 EMA           : {len(h1_ema_good):>2}/{len(H1_EMA_PAIRS)} pairs PASS  | live: 13 sleeves")
+print(f"MACD H1          : {len(macd_good):>2}/{len(MACD_PAIRS)} pairs PASS  | live:  1 sleeve")
 print(f"ORB M30          : {len(orb_good):>2}/{len(ORB_PAIRS)} pairs PASS  | live: 10 sleeves")
 print(f"PDH/PDL H1       : {len(pdhl_good):>2}/{len(PDHL_PAIRS)} pairs PASS  | live: 14 sleeves")
-total_pass = len(m30_good) + len(h1_ema_good) + len(macd_good) + len(orb_good) + len(pdhl_good)
-print(f"\nTotal tested: {total_pass} pass  (+ 5 daily BBMRT not re-run)")
+total_pass = len(daily_bbmrt_good)+len(daily_ema_good)+len(m30_good)+len(h1_ema_good)+len(macd_good)+len(orb_good)+len(pdhl_good)
+print(f"\nTotal: {total_pass}/{len(DAILY_BBMRT_PAIRS)+len(DAILY_EMA_PAIRS)+len(M30_PAIRS)+len(H1_EMA_PAIRS)+len(MACD_PAIRS)+len(ORB_PAIRS)+len(PDHL_PAIRS)} tested pairs PASS")
