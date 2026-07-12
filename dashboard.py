@@ -231,7 +231,7 @@ if not df_j_top.empty and n_closed_top > 0:
                    zeroline=False, tickformat=",.0f"),
         hovermode="x unified", showlegend=False,
     )
-    st.plotly_chart(fig_eq, use_container_width=True)
+    st.plotly_chart(fig_eq, width='stretch')
 
 st.divider()
 
@@ -279,13 +279,13 @@ else:
                    zerolinecolor="#8b949e", tickprefix="$"),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Table
     display_df = df_trades.copy()
     display_df["Unreal P/L"] = display_df["Unreal P/L"].apply(lambda v: f"${v:+.2f}")
     display_df["Move%"] = display_df["Move%"].apply(lambda v: f"{v:+.3f}%")
-    st.dataframe(display_df, hide_index=True, use_container_width=True)
+    st.dataframe(display_df, hide_index=True, width='stretch')
 
     real_total = sum(float(t.get("unrealizedPL", 0)) for t in open_trades)
     st.markdown(f'<div style="font-family:Courier New;font-size:16px;color:{"#3fb950" if real_total>=0 else "#f85149"};font-weight:700;">Total unrealized: ${real_total:+,.2f} across {len(open_trades)} trades</div>', unsafe_allow_html=True)
@@ -326,7 +326,7 @@ try:
             showlegend=False,
             hovermode="x unified",
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
     else:
         st.info("No balance history yet — appears once a trade closes.")
 except Exception as e:
@@ -372,7 +372,7 @@ else:
                        zerolinecolor="#8b949e", tickprefix="$"),
             showlegend=False,
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
         # Summary stats row
         total_closed_pl = closes["realized_pl"].sum()
@@ -387,11 +387,11 @@ else:
         st.markdown("<br>", unsafe_allow_html=True)
 
         st.caption("Performance by sleeve")
-        st.dataframe(summary[["tag","trades","win_rate","total_pl","avg_pl"]], hide_index=True, use_container_width=True)
+        st.dataframe(summary[["tag","trades","win_rate","total_pl","avg_pl"]], hide_index=True, width='stretch')
         st.divider()
 
     st.caption("Full journal (newest first)")
-    st.dataframe(df_j.iloc[::-1], hide_index=True, use_container_width=True)
+    st.dataframe(df_j.iloc[::-1], hide_index=True, width='stretch')
 
 st.divider()
 
@@ -496,7 +496,7 @@ try:
             hovermode="x unified",
             showlegend=False,
         )
-        st.plotly_chart(fig_c, use_container_width=True)
+        st.plotly_chart(fig_c, width='stretch')
 
 except Exception as e:
     st.warning(f"Could not load chart: {e}")

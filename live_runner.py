@@ -36,7 +36,7 @@ allow_live=True here.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -185,6 +185,8 @@ W_WARMUP   = 15      # weekly bars for trend filter
 _RATE_CACHE: dict = {}           # rate_instrument -> (rate, timestamp)
 _RATE_CACHE_TTL = 300            # seconds
 PDHL_CLOSED_IDS  = Path(__file__).parent / "pdhl_closed_ids.json"
+PDHL_COOLDOWN    = Path(__file__).parent / "pdhl_cooldown.json"
+_PDHL_COOLDOWN_H = 6   # Option A: hours to block re-entry after $6k profit_target close
 CONSEC_CLOSED_IDS = Path(__file__).parent / "consec_closed_ids.json"
 FVG_CLOSED_IDS   = Path(__file__).parent / "fvg_closed_ids.json"
 RSI_CLOSED_IDS   = Path(__file__).parent / "rsi_closed_ids.json"
@@ -937,6 +939,7 @@ def run_pdhl_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equ
             _log(f"{tag}: PROFIT TARGET ${_PDHL_CLOSE_AT_USD:,.0f} hit "
                  f"(unrealizedPL={unreal:+.2f}) -- closing in profit")
             _close_and_journal(b, trade["id"], tag, instrument, "profit_target")
+            _pdhl_set_cooldown(tag)   # Option A: block re-entry for 6h
             return
 
         if av > 0 and current_sl > 0:
@@ -970,6 +973,10 @@ def run_pdhl_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equ
 
     _journal_pdhl_close_if_needed(b, tag, instrument)
 
+    if _pdhl_in_cooldown(tag):
+        _log(f"{tag}: Option A cooldown active -- skipping entry")
+        return
+
     _log(f"{tag}: PDH/PDL prev_high={prev_high:.5f} prev_low={prev_low:.5f} price={price:.5f}")
 
     stop_dist   = abs(price - prev_mid)
@@ -998,6 +1005,33 @@ def run_pdhl_sleeve(b: broker.OandaBroker, tag: str, instrument: str, sleeve_equ
         _open_and_journal(b, tag, instrument, -units, "short", sl, tp)
     else:
         _log(f"{tag}: price inside yesterday's range -- no signal")
+
+
+def _pdhl_set_cooldown(tag: str) -> None:
+    """Option A: write a 6h re-entry cooldown after a $6k profit_target close."""
+    until = (datetime.now(timezone.utc) + timedelta(hours=_PDHL_COOLDOWN_H)).isoformat()
+    data: dict = {}
+    if PDHL_COOLDOWN.exists():
+        try:
+            data = json.loads(PDHL_COOLDOWN.read_text())
+        except Exception:
+            pass
+    data[tag] = until
+    PDHL_COOLDOWN.write_text(json.dumps(data))
+    _log(f"{tag}: Option A cooldown active -- no re-entry until {until}")
+
+
+def _pdhl_in_cooldown(tag: str) -> bool:
+    """Return True if tag is currently within the Option A cooldown window."""
+    if not PDHL_COOLDOWN.exists():
+        return False
+    try:
+        until_str = json.loads(PDHL_COOLDOWN.read_text()).get(tag)
+        if not until_str:
+            return False
+        return datetime.now(timezone.utc) < datetime.fromisoformat(until_str)
+    except Exception:
+        return False
 
 
 def _journal_consec_close_if_needed(b: broker.OandaBroker, tag: str, instrument: str) -> None:
