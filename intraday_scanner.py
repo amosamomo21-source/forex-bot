@@ -33,18 +33,18 @@ from broker import from_env, OandaBroker
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 INSTRUMENTS = [
-    "EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "NZD_USD",
-    "EUR_GBP", "EUR_JPY", "GBP_JPY",
-    "XAU_USD",       # Gold
-    "BCO_USD",       # Brent Oil
-    "SPX500_USD", "NAS100_USD", "UK100_GBP",
-    "WHEAT_USD",
+    # Backtest-validated KEEP instruments (Sharpe ≥ 0.4 at SCORE_MIN=4.0)
+    "GBP_USD",     # Sharpe 1.86, Win 47%
+    "AUD_USD",     # Sharpe 1.26, Win 46%
+    "SPX500_USD",  # Sharpe 1.54, Win 45%
+    "NAS100_USD",  # Sharpe 1.34, Win 47%
+    "USD_CAD",     # Sharpe 0.44, Win 45%
 ]
 
 MAX_OPEN    = 5        # max scanner trades open simultaneously
 RISK_USD    = 1_000   # dollars at risk per trade
 DAILY_LIMIT = -3_000  # stop new trades if scanner's daily P&L hits this
-SCORE_MIN   = 3.0     # minimum signal confluence score to enter
+SCORE_MIN   = 4.0     # minimum signal confluence score to enter (backtest-validated)
 MAX_UNITS   = 200_000 # absolute cap — prevents margin exhaustion when ATR is tiny
 SAFE_AT_USD  = 100    # when unrealized profit hits this, move SL to break-even
 CLOSE_AT_USD     = 1_000  # when combined scanner profit hits this, close all trades
